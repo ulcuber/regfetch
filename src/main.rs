@@ -52,6 +52,7 @@ fn main() -> Result<(), String> {
             "-a" | "--all" => {
                 show_regs = true;
                 show_procs = true;
+                show_mods = true;
                 show_exes = true;
                 show_libs = true;
                 show_total = true;
@@ -117,10 +118,10 @@ fn main() -> Result<(), String> {
     let used = mem.mem_total - mem.mem_available;
 
     let kernel = mem.s_unreclaim + mem.kernel_stack + mem.page_tables + mem.sec_page_tables;
-    let mut other_used = used - total_private - procs.total_exes - procs.total_libs - mem.shmem - mem.buffers - kernel - mem.vmalloc_used;
+    let mut other_used = used - total_private - procs.total_exes - procs.total_libs - mem.shmem - kernel - mem.vmalloc_used;
 
     let mut unused_cache = mem.cached - other_used;
-    let mut other_not_free = not_free - mem.k_reclaimable;
+    let mut other_not_free = not_free - mem.buffers - mem.k_reclaimable;
     if unused_cache > other_not_free {
         let delta = unused_cache - other_not_free;
         unused_cache -= delta;
@@ -136,6 +137,7 @@ fn main() -> Result<(), String> {
     println!("    Available: {}", h(mem.mem_available));
     println!("      Free: {}", h(mem.mem_free));
     println!("      Not free: {}", h(not_free));
+    println!("        Buffers: {}", h(mem.buffers));
     println!("        KReclaimable: {}", h(mem.k_reclaimable));
     println!("          SReclaimable: {} ({})", h(mem.s_reclaimable), h(mem.slab));
     println!("        Unused cache: {} ({})", h(unused_cache), h(mem.cached));
@@ -147,14 +149,15 @@ fn main() -> Result<(), String> {
     println!("      Exes: {}", h(procs.total_exes));
     println!("      Libs: {}", h(procs.total_libs));
     println!("      Shmem: {}", h(mem.shmem));
-    println!("      Buffers: {}", h(mem.buffers));
     println!("      Kernel: {}", h(kernel));
     println!("        SUnreclaim: {} ({})", h(mem.s_unreclaim), h(mem.slab));
     println!("        KernelStack: {}", h(mem.kernel_stack));
     println!("        PageTables: {}", h(mem.page_tables));
+    println!("          [vdso]: {}", h(procs.total_vdso));
+    println!("          [vvar]: {}", h(procs.total_vvar));
     println!("        SecPageTables: {}", h(mem.sec_page_tables));
-    println!("      Modules: {}", h(kmods.used));
     println!("      VmallocUsed: {}", h(mem.vmalloc_used));
+    println!("        Modules: {}", h(kmods.used));
     println!("    Active cache: {} ({})", h(other_used), h(mem.cached));
 
     Ok(())

@@ -1,6 +1,7 @@
 use std::fs;
 
 use crate::tree::{Region, RegionVariant};
+use crate::util::human_readable_size as h;
 
 #[derive(Debug, Default)]
 pub struct KernelModules {
@@ -66,5 +67,7 @@ impl KernelModules {
         for region in &self.roots {
             region.print_tree(0);
         }
+
+        println!("Total modules: {}", h(self.used));
     }
 }

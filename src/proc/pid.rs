@@ -8,7 +8,9 @@ use crate::util::human_readable_size as h;
 pub struct Proc {
     pub pid: u32,
     pub ppid: u32,
+    // with private_libs
     pub private_size: u64, // Private_Clean + Private_Dirty of anon, [heap], [stack], etc
+    pub private_libs: u64, // Private_Clean + Private_Dirty of /**/*.so
     pub total_private: u64, // With children
     pub pss: u64,
     pub total_pss: u64, // With children
@@ -22,6 +24,7 @@ impl Proc {
             pid,
             ppid: 0,
             private_size: 0,
+            private_libs: 0,
             total_private: 0,
             pss: 0,
             total_pss: 0,
@@ -62,11 +65,12 @@ impl Proc {
     pub fn print_tree(&self, depth: usize) {
         let indent = " ".repeat(depth * 2);
         println!(
-            "{} {} {} ({}/{}, {}/{})",
+            "{} {} {} ({} ({})/{}, {}/{})",
             indent,
             self.pid,
             self.name,
             h(self.private_size),
+            h(self.private_libs),
             h(self.pss),
             h(self.total_private),
             h(self.total_pss),
@@ -95,6 +99,8 @@ pub struct ProcTree {
     pub total_pss: u64,
     pub total_exes: u64,
     pub total_libs: u64,
+    pub total_vdso: u64,
+    pub total_vvar: u64,
     pub own_proc: Option<Proc>,
     pub roots: Vec<Proc>,
     pub sorted_exes: Vec<Exe>,
@@ -111,6 +117,8 @@ impl ProcTree {
             total_pss: 0,
             total_exes: 0,
             total_libs: 0,
+            total_vdso: 0,
+            total_vvar: 0,
             own_proc: None,
             roots: Vec::new(),
             sorted_exes: Vec::new(),
@@ -190,48 +198,24 @@ impl ProcTree {
 
         let smaps_path = format!("/proc/{}/smaps", pid);
         if let Ok(content) = fs::read_to_string(&smaps_path) {
-            let mut current_region = String::new();
+            let mut current_region: Option<String> = None;
             let mut private_clean = 0u64;
             let mut private_dirty = 0u64;
             let mut pss = 0u64;
             let mut shared_clean = 0u64;
             let mut shared_dirty = 0u64;
-            let mut is_anon = false;
-            let mut is_exe = false;
-            let mut is_lib = false;
             let mut start_addr = 0u64;
 
             for line in content.lines() {
                 let trimmed = line.trim();
 
-                if trimmed.contains(" r") && trimmed.contains("p ") && trimmed.contains("-") {
-                    if !current_region.is_empty() && !self.addresses.contains(&start_addr) {
-                        if is_anon {
-                            proc.private_size += private_clean + private_dirty;
-                            proc.pss += pss;
-                        } else if is_exe {
-                            let shared = shared_clean + shared_dirty;
-                            self.total_exes += shared;
-                            if let Some(exe) = self.exes.get_mut(&current_region) {
-                                exe.total_size += shared;
-                            } else {
-                                self.exes.insert(current_region.clone(), Exe {
-                                    total_size: shared,
-                                    name: current_region,
-                                });
-                            }
-                        } else if is_lib {
-                            let shared = shared_clean + shared_dirty;
-                            self.total_libs += shared;
-                            if let Some(lib) = self.libs.get_mut(&current_region) {
-                                lib.total_size += shared;
-                            } else {
-                                self.libs.insert(current_region.clone(), Lib {
-                                    total_size: shared,
-                                    name: current_region,
-                                });
-                            }
-                        }
+                // rwxp
+                if (trimmed.contains(" r") || trimmed.contains(" -")) && (trimmed.contains("p ") || trimmed.contains("s ")) {
+                    if let Some(path) = current_region && !self.addresses.contains(&start_addr) {
+                        let private = private_clean + private_dirty;
+                        let shared = shared_clean + shared_dirty;
+
+                        self.add_size(&mut proc, &path, private, shared, pss);
                     }
 
                     let parts: Vec<&str> = trimmed.split_whitespace().collect();
@@ -252,11 +236,7 @@ impl ProcTree {
                     // let inode = u64::from_str_radix(parts[4], 10).ok();
                     let path = parts[5..].join(" ");
 
-                    is_anon = path.is_empty() || path.starts_with('[');
-                    is_exe = path.starts_with('/') && !path.contains(".so");
-                    is_lib = path.contains(".so");
-
-                    current_region = path;
+                    current_region = Some(path);
                     private_clean = 0;
                     private_dirty = 0;
                     pss = 0;
@@ -285,33 +265,11 @@ impl ProcTree {
                 }
             }
 
-            if !current_region.is_empty() && !self.addresses.contains(&start_addr) {
-                if is_anon {
-                    proc.private_size += private_clean + private_dirty;
-                    proc.pss += pss;
-                } else if is_exe {
-                    let shared = shared_clean + shared_dirty;
-                    self.total_exes += shared;
-                    if let Some(exe) = self.exes.get_mut(&current_region) {
-                        exe.total_size += shared;
-                    } else {
-                        self.exes.insert(current_region.clone(), Exe {
-                            total_size: shared,
-                            name: current_region,
-                        });
-                    }
-                } else if is_lib {
-                    let shared = shared_clean + shared_dirty;
-                    self.total_libs += shared;
-                    if let Some(lib) = self.libs.get_mut(&current_region) {
-                        lib.total_size += shared;
-                    } else {
-                        self.libs.insert(current_region.clone(), Lib {
-                            total_size: shared,
-                            name: current_region,
-                        });
-                    }
-                }
+            if let Some(path) = current_region && !self.addresses.contains(&start_addr) {
+                let private = private_clean + private_dirty;
+                let shared = shared_clean + shared_dirty;
+
+                self.add_size(&mut proc, &path, private, shared, pss);
             }
         }
 
@@ -327,6 +285,49 @@ impl ProcTree {
         }
 
         Ok(proc)
+    }
+
+    fn add_size(&mut self, proc: &mut Proc, path: &str, private: u64, shared: u64, pss: u64) {
+        if path == "[vdso]" {
+            self.total_vdso += shared;
+        } else if path == "[vvar]" || path == "[vvar_vclock]" {
+            self.total_vvar += shared;
+        } else if path == "[vsyscall]" {
+            // kernel legacy
+        // } else if path == "[stack]" {
+        } else if path.starts_with('[') {
+            proc.private_size += private;
+            proc.pss += pss;
+        } else if path.is_empty() {
+            proc.private_size += private;
+            proc.pss += pss;
+        } else if path.contains(".so") {
+            proc.private_size += private;
+            proc.private_libs += private;
+            proc.pss += pss;
+
+            if shared > 0 {
+                self.total_libs += shared;
+                if let Some(lib) = self.libs.get_mut(path) {
+                    lib.total_size += shared;
+                } else {
+                    self.libs.insert(path.to_string(), Lib {
+                        total_size: shared,
+                        name: path.to_string(),
+                    });
+                }
+            }
+        } else if path.starts_with('/') {
+            self.total_exes += private + shared;
+            if let Some(exe) = self.exes.get_mut(path) {
+                exe.total_size += private + shared;
+            } else {
+                self.exes.insert(path.to_string(), Exe {
+                    total_size: private + shared,
+                    name: path.to_string(),
+                });
+            }
+        }
     }
 
     fn get_process_name(pid: u32) -> Result<String, String> {
@@ -387,7 +388,7 @@ impl ProcTree {
             proc.print_tree(0);
         }
         println!(
-            "Procs total: {}/{}",
+            "Total procs: {}/{}",
             h(self.total_private),
             h(self.total_pss),
         );
