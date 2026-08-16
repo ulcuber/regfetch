@@ -19,6 +19,7 @@ fn main() -> Result<(), String> {
     let mut show_exes = false;
     let mut show_libs = false;
     let mut show_total = true;
+    let mut show_compact = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -32,6 +33,7 @@ fn main() -> Result<(), String> {
                 println!("  -l, --libs       Show /proc/<pid>/smaps + /proc/<pid>/status libraries");
                 println!("  -a, --all        Show all of the above");
                 println!("  -n, --no-total   Do not show totals (/proc/meminfo + calculated)");
+                println!("  -c, --compact    Show minimum info");
                 return Ok(());
             },
             "-r" | "--regs" => {
@@ -60,6 +62,10 @@ fn main() -> Result<(), String> {
             "-n" | "--no-total" => {
                 show_total = false;
             },
+            "-c" | "--compact" => {
+                show_total = false;
+                show_compact = true;
+            },
             _ => {
                 println!("Unknown argument: {}", arg);
             },
@@ -84,6 +90,7 @@ fn main() -> Result<(), String> {
     }
 
     if show_mods {
+        println!();
         kmods.print_tree();
     }
 
@@ -102,6 +109,23 @@ fn main() -> Result<(), String> {
         procs.print_libs();
     }
 
+    let own_private = if let Some(proc) = procs.own_proc {
+        proc.total_private
+    } else {
+        0
+    };
+
+    if show_compact {
+        let total = procs.total_private + procs.total_exes + procs.total_libs + kmods.used;
+        println!("Kernel out of total: {}", h(tree.kernel_size));
+        println!("Used: {}", h(total));
+        println!("  Private: {}", h(procs.total_private));
+        println!("  Exes: {}", h(procs.total_exes));
+        println!("  Libs: {}", h(procs.total_libs));
+        println!("  Mods: {}", h(kmods.used));
+        println!("Own: {}", h(own_private));
+    }
+
     if !show_total {
         return Ok(());
     }
@@ -109,11 +133,6 @@ fn main() -> Result<(), String> {
     let system_ram_reserved = tree.ram_size - tree.kernel_size - mem.mem_total;
 
     let total_private = procs.total_private;
-    let own_private = if let Some(proc) = procs.own_proc {
-        proc.total_private
-    } else {
-        0
-    };
     let not_free = mem.mem_available - mem.mem_free;
     let used = mem.mem_total - mem.mem_available;
 
