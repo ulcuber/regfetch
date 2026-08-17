@@ -236,7 +236,7 @@ impl ProcTree {
                     // let inode = u64::from_str_radix(parts[4], 10).ok();
                     let path = parts[5..].join(" ");
 
-                    current_region = Some(path);
+                    current_region = Some(path.trim().to_string());
                     private_clean = 0;
                     private_dirty = 0;
                     pss = 0;
