@@ -116,13 +116,16 @@ fn main() -> Result<(), String> {
     };
 
     if show_compact {
-        let total = procs.total_private + procs.total_exes + procs.total_libs + kmods.used;
-        println!("Kernel out of total: {}", h(tree.kernel_size));
+        let used = procs.total_private + procs.total_exes + procs.total_libs;
+        let total = used + kmods.used;
+        println!("Kernel out of MemTotal: {}", h(tree.kernel_size));
         println!("Used: {}", h(total));
-        println!("  Private: {}", h(procs.total_private));
-        println!("  Exes: {}", h(procs.total_exes));
-        println!("  Libs: {}", h(procs.total_libs));
-        println!("  Mods: {}", h(kmods.used));
+        println!("  User: {}", h(used));
+        println!("    Private: {} (see -p)", h(procs.total_private));
+        println!("    Exes: {} (reduce use flags)", h(procs.total_exes));
+        println!("    Libs: {} (use musl, see -l)", h(procs.total_libs));
+        println!("  Kernel");
+        println!("    Modules: {} (use =y instead of =m to move out of MemTotal, see -m)", h(kmods.used));
         println!("Own: {}", h(own_private));
     }
 
@@ -137,7 +140,7 @@ fn main() -> Result<(), String> {
     let used = mem.mem_total - mem.mem_available;
 
     let kernel = mem.s_unreclaim + mem.kernel_stack + mem.page_tables + mem.sec_page_tables;
-    let mut other_used = used - total_private - procs.total_exes - procs.total_libs - mem.shmem - kernel - mem.vmalloc_used;
+    let mut other_used = used - total_private - procs.total_exes - procs.total_libs - kernel - mem.vmalloc_used;
 
     let mut unused_cache = mem.cached - other_used;
     let mut other_not_free = not_free - mem.buffers - mem.k_reclaimable;
@@ -167,7 +170,6 @@ fn main() -> Result<(), String> {
     println!("        Other: {}", h(total_private - own_private));
     println!("      Exes: {}", h(procs.total_exes));
     println!("      Libs: {}", h(procs.total_libs));
-    println!("      Shmem: {}", h(mem.shmem));
     println!("      Kernel: {}", h(kernel));
     println!("        SUnreclaim: {} ({})", h(mem.s_unreclaim), h(mem.slab));
     println!("        KernelStack: {}", h(mem.kernel_stack));
@@ -178,6 +180,7 @@ fn main() -> Result<(), String> {
     println!("      VmallocUsed: {}", h(mem.vmalloc_used));
     println!("        Modules: {}", h(kmods.used));
     println!("    Active cache: {} ({})", h(other_used), h(mem.cached));
+    println!("      Shmem: {}", h(mem.shmem));
 
     Ok(())
 }

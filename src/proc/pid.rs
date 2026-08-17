@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -107,7 +107,6 @@ pub struct ProcTree {
     pub sorted_libs: Vec<Lib>,
     pub exes: HashMap<String, Exe>,
     pub libs: HashMap<String, Lib>,
-    pub addresses: HashSet<u64>, // start addresses to prevent double count
 }
 
 impl ProcTree {
@@ -125,7 +124,6 @@ impl ProcTree {
             sorted_libs: Vec::new(),
             exes: HashMap::new(),
             libs: HashMap::new(),
-            addresses: HashSet::new(),
         }
     }
 
@@ -204,14 +202,13 @@ impl ProcTree {
             let mut pss = 0u64;
             let mut shared_clean = 0u64;
             let mut shared_dirty = 0u64;
-            let mut start_addr = 0u64;
 
             for line in content.lines() {
                 let trimmed = line.trim();
 
                 // rwxp
                 if (trimmed.contains(" r") || trimmed.contains(" -")) && (trimmed.contains("p ") || trimmed.contains("s ")) {
-                    if let Some(path) = current_region && !self.addresses.contains(&start_addr) {
+                    if let Some(path) = current_region {
                         let private = private_clean + private_dirty;
                         let shared = shared_clean + shared_dirty;
 
@@ -223,13 +220,7 @@ impl ProcTree {
                         return Err(format!("Expected 5 or more parts"));
                     }
 
-                    let addr_parts: Vec<&str> = parts[0].split('-').collect();
-                    if addr_parts.len() == 2 {
-                        if let Ok(addr) = u64::from_str_radix(addr_parts[0], 16) {
-                            start_addr = addr;
-                        }
-                    }
-
+                    // virtial address spaces are unique for processes so skipping part 0
                     // let flags = parts[1];
                     // 2 offset in file
                     // 3 device hosting the file
@@ -265,7 +256,7 @@ impl ProcTree {
                 }
             }
 
-            if let Some(path) = current_region && !self.addresses.contains(&start_addr) {
+            if let Some(path) = current_region {
                 let private = private_clean + private_dirty;
                 let shared = shared_clean + shared_dirty;
 
@@ -306,26 +297,35 @@ impl ProcTree {
             proc.private_libs += private;
             proc.pss += pss;
 
-            if shared > 0 {
-                self.total_libs += shared;
+            let proportional_shared = pss - private;
+            if proportional_shared > 0 {
+                self.total_libs += proportional_shared;
                 if let Some(lib) = self.libs.get_mut(path) {
-                    lib.total_size += shared;
+                    lib.total_size += proportional_shared;
                 } else {
                     self.libs.insert(path.to_string(), Lib {
-                        total_size: shared,
+                        total_size: proportional_shared,
                         name: path.to_string(),
                     });
                 }
             }
+        } else if path.starts_with("/dev/shm") {
+            // should be in /proc/meminfo Shmem
         } else if path.starts_with('/') {
-            self.total_exes += private + shared;
-            if let Some(exe) = self.exes.get_mut(path) {
-                exe.total_size += private + shared;
-            } else {
-                self.exes.insert(path.to_string(), Exe {
-                    total_size: private + shared,
-                    name: path.to_string(),
-                });
+            proc.private_size += private;
+
+            let proportional_shared = pss - private;
+
+            if proportional_shared > 0 {
+                self.total_exes += proportional_shared;
+                if let Some(exe) = self.exes.get_mut(path) {
+                    exe.total_size += proportional_shared;
+                } else {
+                    self.exes.insert(path.to_string(), Exe {
+                        total_size: proportional_shared,
+                        name: path.to_string(),
+                    });
+                }
             }
         }
     }
